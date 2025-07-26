@@ -1,0 +1,12 @@
+.vscode/
+build/
+cmake/
+CMakeFIles/
+Core/
+Drivers/
+.mxproject
+CMakeCache.txt
+CMakeLists.txt
+CMakePresets.json
+STM32F446XX_FLASH.ld
+startup_stm32f446xx.s
