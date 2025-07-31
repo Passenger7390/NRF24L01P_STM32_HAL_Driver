@@ -3,6 +3,7 @@
 
 #include "main.h"
 #include <string.h>
+#include <stdio.h>
 
 // NRF24L01P Register Map
 #define CONFIG 0X00
@@ -60,8 +61,9 @@ void NRF24_WriteReg(uint8_t reg, uint8_t data);
 void NRF24_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin);
 void NRF24_TXMode(uint8_t *address, uint8_t channel);
 void NRF24_RXMode(uint8_t *address, uint8_t channel);
-uint8_t NRF24_Transmit(uint8_t *data);
+uint8_t NRF24_Transmit(uint8_t *data, uint8_t length);
 uint8_t NRF24_Receive(uint8_t *data);
+uint8_t NRF24_GetPayloadWidth(void);
 void send_cmd(uint8_t cmd);
 void cs_low(void);
 void cs_high(void);
