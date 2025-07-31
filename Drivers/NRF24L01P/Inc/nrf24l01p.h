@@ -46,7 +46,8 @@
 #define NOP 0xFF
 
 typedef enum {
-    WAIT_FOR_STARTUP,
+    RX_MODE,
+    TX_MODE,
     POWER_DOWN_MODE,
     NRF24_STANDBY1,
     NRF24_STANDBY2
@@ -56,7 +57,11 @@ void NRF24_WriteRegs(uint8_t start_reg, uint8_t* data, uint8_t size);
 void NRF24_ReadRegs(uint8_t start_reg, uint8_t* data, uint8_t size);
 uint8_t NRF24_ReadReg(uint8_t reg);
 void NRF24_WriteReg(uint8_t reg, uint8_t data);
-void NRF24_Init(SPI_HandleTypeDef *hspi);
+void NRF24_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin);
+void NRF24_TXMode(uint8_t *address, uint8_t channel);
+void NRF24_RXMode(uint8_t *address, uint8_t channel);
+uint8_t NRF24_Transmit(uint8_t *data);
+uint8_t NRF24_Receive(uint8_t *data);
 void send_cmd(uint8_t cmd);
 void cs_low(void);
 void cs_high(void);
