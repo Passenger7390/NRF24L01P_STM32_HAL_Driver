@@ -47,27 +47,37 @@
 #define NOP 0xFF
 
 typedef enum {
-    RX_MODE,
-    TX_MODE,
-    POWER_DOWN_MODE,
-    NRF24_STANDBY1,
-    NRF24_STANDBY2
-} NRF24_State_t;
+    NRF24_MODE_POWER_DOWN,
+    NRF24_MODE_STANDBY,
+    NRF24_MODE_RX,
+    NRF24_MODE_TX
+} NRF24_Mode_t;
 
-void NRF24_WriteRegs(uint8_t start_reg, uint8_t* data, uint8_t size);
-void NRF24_ReadRegs(uint8_t start_reg, uint8_t* data, uint8_t size);
-uint8_t NRF24_ReadReg(uint8_t reg);
-void NRF24_WriteReg(uint8_t reg, uint8_t data);
-void NRF24_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin);
-void NRF24_TXMode(uint8_t *address, uint8_t channel);
-void NRF24_RXMode(uint8_t *address, uint8_t channel);
-uint8_t NRF24_Transmit(uint8_t *data, uint8_t length);
-uint8_t NRF24_Receive(uint8_t *data);
-uint8_t NRF24_GetPayloadWidth(void);
-void send_cmd(uint8_t cmd);
-void cs_low(void);
-void cs_high(void);
-void ce_low(void);
-void ce_high(void);
+// Main handle structure
+typedef struct {
+    SPI_HandleTypeDef *hspi;
+    GPIO_TypeDef *ce_port;
+    uint16_t ce_pin;
+    GPIO_TypeDef *csn_port;
+    uint16_t csn_pin;
+    NRF24_Mode_t mode;
+    uint8_t payload_size; // Default payload size
+    uint8_t channel;      // RF Channel
+} NRF24_t;
+
+// Function prototypes now take a pointer to the handle
+void NRF24_Init(NRF24_t *nrf, SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin);
+void NRF24_TXMode(NRF24_t *nrf, uint8_t *address, uint8_t channel);
+void NRF24_RXMode(NRF24_t *nrf, uint8_t *address, uint8_t channel);
+uint8_t NRF24_Transmit(NRF24_t *nrf, uint8_t *data, uint8_t length);
+uint8_t NRF24_Receive(NRF24_t *nrf, uint8_t *data);
+
+// Lower-level functions that you might not need to expose in the header
+void NRF24_WriteReg(NRF24_t *nrf, uint8_t reg, uint8_t data);
+uint8_t NRF24_ReadReg(NRF24_t *nrf, uint8_t reg);
+void NRF24_WriteRegs(NRF24_t *nrf, uint8_t start_reg, uint8_t* data, uint8_t size);
+void NRF24_ReadRegs(NRF24_t *nrf, uint8_t start_reg, uint8_t* data, uint8_t size);
+uint8_t NRF24_GetPayloadWidth(NRF24_t *nrf);
+void NRF24_SendCmd(NRF24_t *nrf, uint8_t cmd);
 
 #endif

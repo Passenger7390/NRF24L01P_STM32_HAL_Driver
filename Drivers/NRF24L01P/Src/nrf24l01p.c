@@ -1,238 +1,232 @@
 #include "nrf24l01p.h"
 
-// TODO: create functions for config
+// Private function prototypes
+static void NRF24_CS_Low(NRF24_t *nrf);
+static void NRF24_CS_High(NRF24_t *nrf);
+static void NRF24_CE_Low(NRF24_t *nrf);
+static void NRF24_CE_High(NRF24_t *nrf);
 
-static SPI_HandleTypeDef *nrf24_spi;
-static GPIO_TypeDef *CE_Port;
-static uint16_t CE_Pin;
-static GPIO_TypeDef *CSN_Port;
-static uint16_t CSN_Pin;
+void NRF24_Init(NRF24_t *nrf, SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin) {
+    nrf->hspi = hspi;
+    nrf->ce_port = ce_port;
+    nrf->ce_pin = ce_pin;
+    nrf->csn_port = csn_port;
+    nrf->csn_pin = csn_pin;
+    nrf->payload_size = 32; // Default payload size
+    nrf->channel = 76;      // Default channel
+    nrf->mode = NRF24_MODE_POWER_DOWN;
 
-static NRF24_State_t nrf24_state = POWER_DOWN_MODE;
+    NRF24_CE_Low(nrf);
+    NRF24_CS_High(nrf);
 
-uint8_t NRF24_GetPayloadWidth(void) { // Dynamic payload feature
-    uint8_t width;
-    uint8_t cmd = R_RX_PL_WID;
-    cs_low();
-    HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-    HAL_SPI_Receive(nrf24_spi, &width, 1, 100);
-    cs_high();
-    return width;
-}
+    HAL_Delay(5);
 
-uint8_t NRF24_Receive(uint8_t *data) {
-    uint8_t status = NRF24_ReadReg(STATUS);
+    // Reset all registers to default
+    NRF24_WriteReg(nrf, CONFIG, 0x0C);
+    NRF24_WriteReg(nrf, EN_AA, 0x3F);
+    NRF24_WriteReg(nrf, EN_RXADDR, 0x03);
+    NRF24_WriteReg(nrf, SETUP_AW, 0x03);
+    NRF24_WriteReg(nrf, SETUP_RETR, 0x03);
+    NRF24_WriteReg(nrf, RF_CH, nrf->channel);
+    NRF24_WriteReg(nrf, RF_SETUP, 0x0E);
 
-    if ((status & (1 << 6))) {
-        uint8_t len = NRF24_GetPayloadWidth();
-        if (len > 32) {
-            send_cmd(FLUSH_RX);
-            NRF24_WriteReg(STATUS, (1 << 6));
-            return 0;
-        }
+    // Activate features
+    uint8_t cmd = 0x50; // ACTIVATE command
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+    cmd = 0x73;
+    HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+    NRF24_CS_High(nrf);
 
-        uint8_t cmd = R_RX_PAYLOAD;
-        cs_low();
-        HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-        HAL_SPI_Receive(nrf24_spi, data, len, 100);
-        cs_high();
+    // Enable dynamic payload
+    NRF24_WriteReg(nrf, FEATURE, (1 << 2));
+    NRF24_WriteReg(nrf, DYNPD, 0x3F);
 
-        NRF24_WriteReg(STATUS, (1 << 6));
-        return len;
-    }
-
-    return 0;
-}
-
-void NRF24_RXMode(uint8_t *address, uint8_t channel) {
-    ce_low();
-
-    NRF24_WriteReg(RF_CH, channel);
-    NRF24_WriteRegs(RX_ADDR_P0, address, 5);
-    
-    uint8_t config = NRF24_ReadReg(CONFIG);
+    // Go to Standby-I mode
+    uint8_t config = NRF24_ReadReg(nrf, CONFIG);
     config |= (1 << 1);
-    config |= (1 << 0);
-    NRF24_WriteReg(CONFIG, config);
-
-    ce_high();
+    NRF24_WriteReg(nrf, CONFIG, config);
+    nrf->mode = NRF24_MODE_STANDBY;
 
     HAL_Delay(2);
-
-    nrf24_state = RX_MODE;
 }
 
-uint8_t NRF24_Transmit(uint8_t *data, uint8_t length) {
-    ce_low();
+void NRF24_TXMode(NRF24_t *nrf, uint8_t *address, uint8_t channel) {
+    NRF24_CE_Low(nrf);
 
+    nrf->channel = channel;
+    NRF24_WriteReg(nrf, RF_CH, nrf->channel);
+    NRF24_WriteRegs(nrf, TX_ADDR, address, 5);
+    NRF24_WriteRegs(nrf, RX_ADDR_P0, address, 5); // Use same address for ACK
+
+    // Power up and set to TX mode
+    uint8_t config = NRF24_ReadReg(nrf, CONFIG);
+    config &= ~(1 << 0); // Clear PRIM_RX
+    NRF24_WriteReg(nrf, CONFIG, config);
+    nrf->mode = NRF24_MODE_TX;
+
+    HAL_Delay(2);
+}
+
+void NRF24_RXMode(NRF24_t *nrf, uint8_t *address, uint8_t channel) {
+    NRF24_CE_Low(nrf);
+
+    nrf->channel = channel;
+    NRF24_WriteReg(nrf, RF_CH, nrf->channel);
+    NRF24_WriteRegs(nrf, RX_ADDR_P0, address, 5);
+
+    // Power up and set to RX mode
+    uint8_t config = NRF24_ReadReg(nrf, CONFIG);
+    config |= (1 << 0); // Set PRIM_RX
+    NRF24_WriteReg(nrf, CONFIG, config);
+    nrf->mode = NRF24_MODE_RX;
+
+    NRF24_CE_High(nrf);
+
+    HAL_Delay(2);
+}
+
+uint8_t NRF24_Transmit(NRF24_t *nrf, uint8_t *data, uint8_t length) {
+    NRF24_CE_Low(nrf);
+
+    // Write payload
     uint8_t cmd = W_TX_PAYLOAD;
-    cs_low();
-    HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-    HAL_SPI_Transmit(nrf24_spi, data, length, 100);
-    cs_high();
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+    HAL_SPI_Transmit(nrf->hspi, data, length, 100);
+    NRF24_CS_High(nrf);
 
-    ce_high();
+    // Pulse CE to start transmission
+    NRF24_CE_High(nrf);
+    HAL_Delay(1); // Keep CE high for at least 10us
+    NRF24_CE_Low(nrf);
 
-    HAL_Delay(1);
-    ce_low();
-
+    // Wait for transmission to complete or fail
     uint32_t start_time = HAL_GetTick();
     uint8_t status;
     while (1) {
-        status = NRF24_ReadReg(STATUS);
-        if ((status & (1 << 5)) || (status & (1 << 4))) {
+        status = NRF24_ReadReg(nrf, STATUS);
+        if ((status & (1 << 5)) || (status & (1 << 4))) { // TX_DS or MAX_RT
             break;
         }
-        if (HAL_GetTick() - start_time > 100) {
+        if (HAL_GetTick() - start_time > 100) { // Timeout
             return 0;
         }
     }
 
-    NRF24_WriteReg(STATUS, (1 << 5) | (1 << 4));
+    // Clear status flags
+    NRF24_WriteReg(nrf, STATUS, (1 << 5) | (1 << 4));
 
-    if (status & (1 << 5)) {
+    if (status & (1 << 5)) { // TX_DS (Data Sent)
         return 1;
-    } else {
+    } else { // MAX_RT (Max Retransmits)
+        NRF24_SendCmd(nrf, FLUSH_TX);
         return 0;
     }
 }
 
-void NRF24_TXMode(uint8_t *address, uint8_t channel) {
-    ce_low();
+uint8_t NRF24_Receive(NRF24_t *nrf, uint8_t *data) {
+    uint8_t status = NRF24_ReadReg(nrf, STATUS);
 
-    NRF24_WriteReg(RF_CH, channel);
-    NRF24_WriteRegs(TX_ADDR, address, 5);
-    NRF24_WriteRegs(RX_ADDR_P0, address, 5);
+    if (status & (1 << 6)) { // RX_DR (Data Ready)
+        uint8_t len = NRF24_GetPayloadWidth(nrf);
+        if (len > 32) {
+            NRF24_SendCmd(nrf, FLUSH_RX);
+            NRF24_WriteReg(nrf, STATUS, (1 << 6)); // Clear flag
+            return 0; // Error
+        }
 
-    uint8_t config = NRF24_ReadReg(CONFIG);
-    config &= ~(1 << 0);
-    NRF24_WriteReg(CONFIG, config);
+        // Read payload
+        uint8_t cmd = R_RX_PAYLOAD;
+        NRF24_CS_Low(nrf);
+        HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+        HAL_SPI_Receive(nrf->hspi, data, len, 100);
+        NRF24_CS_High(nrf);
 
-    HAL_Delay(2);
+        // Clear RX_DR flag
+        NRF24_WriteReg(nrf, STATUS, (1 << 6));
+        return len;
+    }
 
-    nrf24_state = TX_MODE;
+    return 0; // No data available
 }
 
-void NRF24_WriteRegs(uint8_t start_reg, uint8_t* data, uint8_t size) {
-    uint8_t tx_buf[size + 1];
-
-    tx_buf[0] = W_REGISTER | (start_reg & 0x1F);
-
-    // Copy the data to be written into the transmit buffer.
-    memcpy(&tx_buf[1], data, size);
-
-    cs_low();
-
-    HAL_SPI_Transmit(nrf24_spi, tx_buf, size + 1, 100);
-
-    cs_high();
+uint8_t NRF24_GetPayloadWidth(NRF24_t *nrf) {
+    uint8_t width;
+    uint8_t cmd = R_RX_PL_WID;
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+    HAL_SPI_Receive(nrf->hspi, &width, 1, 100);
+    NRF24_CS_High(nrf);
+    return width;
 }
 
-void NRF24_ReadRegs(uint8_t start_reg, uint8_t* data, uint8_t size) {
-    uint8_t tx_buf[size + 1];
-    uint8_t rx_buf[size + 1];
+void NRF24_WriteReg(NRF24_t *nrf, uint8_t reg, uint8_t data) {
+    uint8_t buf[2];
+    buf[0] = W_REGISTER | (reg & 0x1F);
+    buf[1] = data;
 
-    tx_buf[0] = R_REGISTER | (start_reg & 0x1F);
-
-    // The rest of the bytes are dummy bytes to clock out the data.
-    memset(&tx_buf[1], NOP, size);
-
-    cs_low();
-
-    HAL_SPI_TransmitReceive(nrf24_spi, tx_buf, rx_buf, size + 1, 100);
-
-    cs_high();
-
-    memcpy(data, &rx_buf[1], size);
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, buf, 2, 100);
+    NRF24_CS_High(nrf);
 }
 
-uint8_t NRF24_ReadReg(uint8_t reg) {
+uint8_t NRF24_ReadReg(NRF24_t *nrf, uint8_t reg) {
     uint8_t tx_buf[2];
     uint8_t rx_buf[2];
 
     tx_buf[0] = R_REGISTER | (reg & 0x1F);
     tx_buf[1] = NOP;
 
-    cs_low();
-
-    HAL_SPI_TransmitReceive(nrf24_spi, tx_buf, rx_buf, 2, 100);
-
-    cs_high();
+    NRF24_CS_Low(nrf);
+    HAL_SPI_TransmitReceive(nrf->hspi, tx_buf, rx_buf, 2, 100);
+    NRF24_CS_High(nrf);
 
     return rx_buf[1];
 }
 
-void NRF24_WriteReg(uint8_t reg, uint8_t data) {
-    uint8_t buf[2];
-    buf[0] = W_REGISTER | (reg & 0x1F);
-    buf[1] = data;
+void NRF24_WriteRegs(NRF24_t *nrf, uint8_t start_reg, uint8_t* data, uint8_t size) {
+    uint8_t tx_buf[size + 1];
+    tx_buf[0] = W_REGISTER | (start_reg & 0x1F);
+    memcpy(&tx_buf[1], data, size);
 
-    cs_low();
-
-    HAL_SPI_Transmit(nrf24_spi, buf, 2, 100);
-
-    cs_high();
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, tx_buf, size + 1, 100);
+    NRF24_CS_High(nrf);
 }
 
-void NRF24_Init(SPI_HandleTypeDef *hspi, GPIO_TypeDef *ce_port, uint16_t ce_pin, GPIO_TypeDef *csn_port, uint16_t csn_pin) {
-    nrf24_spi = hspi;
-    CE_Port = ce_port;
-    CE_Pin = ce_pin;
-    CSN_Port = csn_port;
-    CSN_Pin = csn_pin;
+void NRF24_ReadRegs(NRF24_t *nrf, uint8_t start_reg, uint8_t* data, uint8_t size) {
+    uint8_t tx_buf[size + 1];
+    uint8_t rx_buf[size + 1];
 
-    ce_low();
-    cs_high();
+    tx_buf[0] = R_REGISTER | (start_reg & 0x1F);
+    memset(&tx_buf[1], NOP, size);
 
-    HAL_Delay(5);
+    NRF24_CS_Low(nrf);
+    HAL_SPI_TransmitReceive(nrf->hspi, tx_buf, rx_buf, size + 1, 100);
+    NRF24_CS_High(nrf);
 
-    NRF24_WriteReg(CONFIG, 0x0C);
-    NRF24_WriteReg(EN_AA, 0x3F);
-    NRF24_WriteReg(EN_RXADDR, 0x03);
-    NRF24_WriteReg(SETUP_AW, 0x03);
-    NRF24_WriteReg(SETUP_RETR, 0x03);
-    NRF24_WriteReg(RF_CH, 76);
-    NRF24_WriteReg(RF_SETUP, 0x0E);
-
-    uint8_t cmd = 0x50; // ACTIVATE command
-    cs_low();
-    HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-    cmd = 0x73;
-    HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-    cs_high();
-
-    NRF24_WriteReg(FEATURE, (1 << 2));
-    NRF24_WriteReg(DYNPD, (1 << 0) | (1 << 1));
-
-    uint8_t config = NRF24_ReadReg(CONFIG);
-    config |= (1 << 1);
-    NRF24_WriteReg(CONFIG, config);
-
-    HAL_Delay(2);
-
-    nrf24_state = NRF24_STANDBY1;
+    memcpy(data, &rx_buf[1], size);
 }
 
-void send_cmd(uint8_t cmd) {
-    cs_low();
-
-    HAL_SPI_Transmit(nrf24_spi, &cmd, 1, 100);
-
-    cs_high();
+void NRF24_SendCmd(NRF24_t *nrf, uint8_t cmd) {
+    NRF24_CS_Low(nrf);
+    HAL_SPI_Transmit(nrf->hspi, &cmd, 1, 100);
+    NRF24_CS_High(nrf);
 }
 
-void cs_low(void) {
-    HAL_GPIO_WritePin(CSN_Port, CSN_Pin, GPIO_PIN_RESET);
+static void NRF24_CS_Low(NRF24_t *nrf) {
+    HAL_GPIO_WritePin(nrf->csn_port, nrf->csn_pin, GPIO_PIN_RESET);
 }
 
-void cs_high(void) {
-    HAL_GPIO_WritePin(CSN_Port, CSN_Pin, GPIO_PIN_SET);
+static void NRF24_CS_High(NRF24_t *nrf) {
+    HAL_GPIO_WritePin(nrf->csn_port, nrf->csn_pin, GPIO_PIN_SET);
 }
 
-void ce_low(void) {
-    HAL_GPIO_WritePin(CE_Port, CE_Pin, GPIO_PIN_RESET);
+static void NRF24_CE_Low(NRF24_t *nrf) {
+    HAL_GPIO_WritePin(nrf->ce_port, nrf->ce_pin, GPIO_PIN_RESET);
 }
 
-void ce_high(void) {
-    HAL_GPIO_WritePin(CE_Port, CE_Pin, GPIO_PIN_SET);
+static void NRF24_CE_High(NRF24_t *nrf) {
+    HAL_GPIO_WritePin(nrf->ce_port, nrf->ce_pin, GPIO_PIN_SET);
 }
